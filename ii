@@ -1,59 +1,53 @@
 import openpyxl
-from datetime import datetime, date
+from datetime import datetime
 import matplotlib.pyplot as plt
 from collections import defaultdict
 
 # Настройки
 INPUT_FILE = "your_file.xlsx"  # Замените на имя вашего файла
-DATE_COLUMN = 0  # Номер столбца с датами (0 - первый столбец)
+DATE_COLUMN = 0  # Первый столбец (индекс 0)
 CHART_TITLE = "Количество записей по дням"
-OUTPUT_CHART = "records_full_chart.png"
+OUTPUT_CHART = "records_chart.png"
 
 def analyze_records():
     # Загружаем книгу
     wb = openpyxl.load_workbook(INPUT_FILE)
     ws = wb.active
     
-    # Создаем словарь для подсчета записей по дням
-    date_dict = defaultdict(int)
+    # Словарь для подсчета записей по дням
+    date_counts = defaultdict(int)
     
     for row in ws.iter_rows(values_only=True):
-        if not row[DATE_COLUMN]:
+        cell_value = row[DATE_COLUMN]
+        
+        # Пропускаем пустые значения
+        if not cell_value:
             continue
             
-        # Обрабатываем дату (учитываем оба формата)
-        try:
-            if isinstance(row[DATE_COLUMN], datetime):
-                # Если дата уже в формате datetime
-                record_date = row[DATE_COLUMN].date()
-            elif isinstance(row[DATE_COLUMN], str):
-                # Если дата в строковом формате "дд.мм.гггг чч:мм"
-                date_part = row[DATE_COLUMN].split()[0]  # Берем только дату
-                record_date = datetime.strptime(date_part, "%d.%m.%Y").date()
-            else:
-                print(f"Неизвестный формат даты: {row[DATE_COLUMN]}")
-                continue
-                
-            date_dict[record_date] += 1
-        except Exception as e:
-            print(f"Ошибка обработки даты {row[DATE_COLUMN]}: {str(e)}")
+        # Обрабатываем datetime объект
+        if isinstance(cell_value, datetime):
+            date_only = cell_value.date()  # Извлекаем только дату
+            date_counts[date_only] += 1
+        else:
+            print(f"Неожиданный формат даты: {cell_value} (тип: {type(cell_value)})")
             continue
     
-    if not date_dict:
+    # Проверяем, есть ли данные
+    if not date_counts:
         print("Нет данных для построения диаграммы!")
         return
     
-    # Подготавливаем данные для диаграммы
-    sorted_dates = sorted(date_dict.keys())
-    dates = [d.strftime("%d.%m.%Y") for d in sorted_dates]
-    counts = [date_dict[d] for d in sorted_dates]
-    max_count = max(counts) if counts else 1
+    # Подготовка данных для графика
+    sorted_dates = sorted(date_counts.keys())
+    dates_str = [d.strftime("%d.%m.%Y") for d in sorted_dates]
+    counts = [date_counts[d] for d in sorted_dates]
+    max_count = max(counts)
     
-    # Строим диаграмму
-    plt.figure(figsize=(14, 6))
-    bars = plt.bar(dates, counts, color='#4b8bbe')
+    # Создание диаграммы
+    plt.figure(figsize=(12, 6))
+    bars = plt.bar(dates_str, counts, color='#4b8bbe')
     
-    # Настройки оформления
+    # Настройка внешнего вида
     plt.title(CHART_TITLE)
     plt.xlabel("Дата")
     plt.ylabel("Количество записей")
@@ -61,21 +55,21 @@ def analyze_records():
     plt.xticks(rotation=45, ha='right')
     plt.grid(axis='y', linestyle='--', alpha=0.7)
     
-    # Добавляем значения над столбцами
+    # Добавляем подписи значений
     for bar in bars:
         height = bar.get_height()
         plt.text(bar.get_x() + bar.get_width()/2., height,
-                 f'{height}',
-                 ha='center', va='bottom')
+                str(height),
+                ha='center', va='bottom')
     
     plt.tight_layout()
     plt.savefig(OUTPUT_CHART, dpi=300)
     print(f"Диаграмма сохранена как {OUTPUT_CHART}")
     
-    # Выводим статистику
+    # Вывод статистики
     print("\nСтатистика по дням:")
-    for day, count in sorted(date_dict.items()):
-        print(f"{day.strftime('%d.%m.%Y')}: {count} записей")
+    for date, count in sorted(date_counts.items()):
+        print(f"{date.strftime('%d.%m.%Y')}: {count} записей")
     
     plt.show()
 
