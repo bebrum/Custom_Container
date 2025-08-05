@@ -1,0 +1,63 @@
+import openpyxl
+from datetime import datetime, timedelta
+import matplotlib.pyplot as plt
+from collections import defaultdict
+
+# Настройки
+INPUT_FILE = "your_file.xlsx"  # Замените на имя вашего файла
+DATE_COLUMN = 0  # Номер столбца с датами (начиная с 0)
+CHART_TITLE = "Количество записей по дням (последние 30 дней)"
+OUTPUT_CHART = "records_chart.png"
+
+def analyze_records():
+    # Загружаем книгу
+    wb = openpyxl.load_workbook(INPUT_FILE)
+    ws = wb.active
+    
+    # Собираем данные
+    date_counts = defaultdict(int)
+    today = datetime.now()
+    thirty_days_ago = today - timedelta(days=30)
+    
+    for row in ws.iter_rows(values_only=True):
+        if not row[DATE_COLUMN]:
+            continue
+            
+        # Парсим дату (предполагаем формат "05.08.2025 12:36")
+        try:
+            date_str = row[DATE_COLUMN].split()[0]  # Берем только дату без времени
+            record_date = datetime.strptime(date_str, "%d.%m.%Y")
+        except (AttributeError, ValueError):
+            continue
+            
+        # Считаем только записи за последние 30 дней
+        if thirty_days_ago <= record_date <= today:
+            date_counts[record_date.date()] += 1
+    
+    # Сортируем даты
+    sorted_dates = sorted(date_counts.keys())
+    dates = [d.strftime("%d.%m") for d in sorted_dates]  # Форматируем для подписей
+    counts = [date_counts[d] for d in sorted_dates]
+    
+    # Строим диаграмму
+    plt.figure(figsize=(12, 6))
+    plt.bar(dates, counts, color='skyblue')
+    
+    # Настройки оформления
+    plt.title(CHART_TITLE)
+    plt.xlabel("Дата")
+    plt.ylabel("Количество записей")
+    plt.xticks(rotation=45)
+    plt.grid(axis='y', linestyle='--', alpha=0.7)
+    
+    # Добавляем значения над столбцами
+    for i, count in enumerate(counts):
+        plt.text(i, count + 0.1, str(count), ha='center')
+    
+    plt.tight_layout()
+    plt.savefig(OUTPUT_CHART)
+    print(f"Диаграмма сохранена как {OUTPUT_CHART}")
+    plt.show()
+
+if __name__ == "__main__":
+    analyze_records()
