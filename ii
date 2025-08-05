@@ -21,18 +21,22 @@ def analyze_records():
         if not row[DATE_COLUMN]:
             continue
             
-        # Обрабатываем дату (уже в формате datetime)
+        # Обрабатываем дату (учитываем оба формата)
         try:
             if isinstance(row[DATE_COLUMN], datetime):
+                # Если дата уже в формате datetime
                 record_date = row[DATE_COLUMN].date()
+            elif isinstance(row[DATE_COLUMN], str):
+                # Если дата в строковом формате "дд.мм.гггг чч:мм"
+                date_part = row[DATE_COLUMN].split()[0]  # Берем только дату
+                record_date = datetime.strptime(date_part, "%d.%m.%Y").date()
             else:
-                # Если вдруг дата не в datetime формате, пробуем распарсить
-                date_str = str(row[DATE_COLUMN]).split()[0]
-                record_date = datetime.strptime(date_str, "%d.%m.%Y").date()
+                print(f"Неизвестный формат даты: {row[DATE_COLUMN]}")
+                continue
                 
             date_dict[record_date] += 1
-        except (AttributeError, ValueError) as e:
-            print(f"Ошибка обработки даты: {row[DATE_COLUMN]} - {e}")
+        except Exception as e:
+            print(f"Ошибка обработки даты {row[DATE_COLUMN]}: {str(e)}")
             continue
     
     if not date_dict:
