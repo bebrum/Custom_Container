@@ -1,5 +1,5 @@
 import openpyxl
-from datetime import datetime
+from datetime import datetime, date
 import matplotlib.pyplot as plt
 from collections import defaultdict
 
@@ -21,26 +21,29 @@ def analyze_records():
         if not row[DATE_COLUMN]:
             continue
             
-        # Парсим дату (формат "05.08.2025 12:36")
+        # Обрабатываем дату (уже в формате datetime)
         try:
-            date_str = row[DATE_COLUMN].split()[0]  # Берем только дату без времени
-            record_date = datetime.strptime(date_str, "%d.%m.%Y").date()
+            if isinstance(row[DATE_COLUMN], datetime):
+                record_date = row[DATE_COLUMN].date()
+            else:
+                # Если вдруг дата не в datetime формате, пробуем распарсить
+                date_str = str(row[DATE_COLUMN]).split()[0]
+                record_date = datetime.strptime(date_str, "%d.%m.%Y").date()
+                
             date_dict[record_date] += 1
-        except (AttributeError, ValueError):
+        except (AttributeError, ValueError) as e:
+            print(f"Ошибка обработки даты: {row[DATE_COLUMN]} - {e}")
             continue
     
-    # Если данных нет - выходим
     if not date_dict:
         print("Нет данных для построения диаграммы!")
         return
     
     # Подготавливаем данные для диаграммы
     sorted_dates = sorted(date_dict.keys())
-    dates = [d.strftime("%d.%m.%Y") for d in sorted_dates]  # Полный формат даты
+    dates = [d.strftime("%d.%m.%Y") for d in sorted_dates]
     counts = [date_dict[d] for d in sorted_dates]
-    
-    # Находим максимальное количество записей для оси Y
-    max_count = max(counts)
+    max_count = max(counts) if counts else 1
     
     # Строим диаграмму
     plt.figure(figsize=(14, 6))
@@ -50,28 +53,25 @@ def analyze_records():
     plt.title(CHART_TITLE)
     plt.xlabel("Дата")
     plt.ylabel("Количество записей")
-    plt.ylim(0, max_count + 1)  # Ось Y от 0 до максимума + 1 для красоты
-    
-    # Поворачиваем подписи дат для удобства
+    plt.ylim(0, max_count + 1)
     plt.xticks(rotation=45, ha='right')
-    
-    # Добавляем сетку и значения над столбцами
     plt.grid(axis='y', linestyle='--', alpha=0.7)
+    
+    # Добавляем значения над столбцами
     for bar in bars:
         height = bar.get_height()
         plt.text(bar.get_x() + bar.get_width()/2., height,
                  f'{height}',
                  ha='center', va='bottom')
     
-    # Автоматически подгоняем layout
     plt.tight_layout()
-    
-    # Сохраняем и показываем
     plt.savefig(OUTPUT_CHART, dpi=300)
     print(f"Диаграмма сохранена как {OUTPUT_CHART}")
+    
+    # Выводим статистику
     print("\nСтатистика по дням:")
-    for date, count in sorted(date_dict.items()):
-        print(f"{date.strftime('%d.%m.%Y')}: {count} записей")
+    for day, count in sorted(date_dict.items()):
+        print(f"{day.strftime('%d.%m.%Y')}: {count} записей")
     
     plt.show()
 
