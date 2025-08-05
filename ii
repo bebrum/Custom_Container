@@ -1,62 +1,78 @@
 import openpyxl
-from datetime import datetime, timedelta
+from datetime import datetime
 import matplotlib.pyplot as plt
 from collections import defaultdict
 
 # Настройки
 INPUT_FILE = "your_file.xlsx"  # Замените на имя вашего файла
-DATE_COLUMN = 0  # Номер столбца с датами (начиная с 0)
-CHART_TITLE = "Количество записей по дням (последние 30 дней)"
-OUTPUT_CHART = "records_chart.png"
+DATE_COLUMN = 0  # Номер столбца с датами (0 - первый столбец)
+CHART_TITLE = "Количество записей по дням"
+OUTPUT_CHART = "records_full_chart.png"
 
 def analyze_records():
     # Загружаем книгу
     wb = openpyxl.load_workbook(INPUT_FILE)
     ws = wb.active
     
-    # Собираем данные
-    date_counts = defaultdict(int)
-    today = datetime.now()
-    thirty_days_ago = today - timedelta(days=30)
+    # Создаем словарь для подсчета записей по дням
+    date_dict = defaultdict(int)
     
     for row in ws.iter_rows(values_only=True):
         if not row[DATE_COLUMN]:
             continue
             
-        # Парсим дату (предполагаем формат "05.08.2025 12:36")
+        # Парсим дату (формат "05.08.2025 12:36")
         try:
             date_str = row[DATE_COLUMN].split()[0]  # Берем только дату без времени
-            record_date = datetime.strptime(date_str, "%d.%m.%Y")
+            record_date = datetime.strptime(date_str, "%d.%m.%Y").date()
+            date_dict[record_date] += 1
         except (AttributeError, ValueError):
             continue
-            
-        # Считаем только записи за последние 30 дней
-        if thirty_days_ago <= record_date <= today:
-            date_counts[record_date.date()] += 1
     
-    # Сортируем даты
-    sorted_dates = sorted(date_counts.keys())
-    dates = [d.strftime("%d.%m") for d in sorted_dates]  # Форматируем для подписей
-    counts = [date_counts[d] for d in sorted_dates]
+    # Если данных нет - выходим
+    if not date_dict:
+        print("Нет данных для построения диаграммы!")
+        return
+    
+    # Подготавливаем данные для диаграммы
+    sorted_dates = sorted(date_dict.keys())
+    dates = [d.strftime("%d.%m.%Y") for d in sorted_dates]  # Полный формат даты
+    counts = [date_dict[d] for d in sorted_dates]
+    
+    # Находим максимальное количество записей для оси Y
+    max_count = max(counts)
     
     # Строим диаграмму
-    plt.figure(figsize=(12, 6))
-    plt.bar(dates, counts, color='skyblue')
+    plt.figure(figsize=(14, 6))
+    bars = plt.bar(dates, counts, color='#4b8bbe')
     
     # Настройки оформления
     plt.title(CHART_TITLE)
     plt.xlabel("Дата")
     plt.ylabel("Количество записей")
-    plt.xticks(rotation=45)
+    plt.ylim(0, max_count + 1)  # Ось Y от 0 до максимума + 1 для красоты
+    
+    # Поворачиваем подписи дат для удобства
+    plt.xticks(rotation=45, ha='right')
+    
+    # Добавляем сетку и значения над столбцами
     plt.grid(axis='y', linestyle='--', alpha=0.7)
+    for bar in bars:
+        height = bar.get_height()
+        plt.text(bar.get_x() + bar.get_width()/2., height,
+                 f'{height}',
+                 ha='center', va='bottom')
     
-    # Добавляем значения над столбцами
-    for i, count in enumerate(counts):
-        plt.text(i, count + 0.1, str(count), ha='center')
-    
+    # Автоматически подгоняем layout
     plt.tight_layout()
-    plt.savefig(OUTPUT_CHART)
+    
+    # Сохраняем и показываем
+    plt.savefig(OUTPUT_CHART, dpi=300)
     print(f"Диаграмма сохранена как {OUTPUT_CHART}")
+    print("\nСтатистика по дням:")
+    for date, count in sorted(date_dict.items()):
+        print(f"{date.strftime('%d.%m.%Y')}: {count} записей")
+    
     plt.show()
 
 if __name__ == "__main__":
