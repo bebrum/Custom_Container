@@ -1,182 +1,83 @@
-import pyautogui
-import json
-import time
-import keyboard
-from threading import Event
+import openpyxl
+from openpyxl import load_workbook
 
-class InvoiceAutoTyper:
-    def __init__(self, json_file_path):
-        """
-        Инициализация автоматического ввода счетов
-        
-        :param json_file_path: путь к JSON файлу со счетами
-        """
-        self.json_file_path = json_file_path
-        # Фиксированные координаты
-        self.input_coords = (475, 316)    # Строка ввода
-        self.submit_coords = (1242, 319)  # Кнопка отправки
-        self.pause_event = Event()
-        self.stop_event = Event()
-        self.invoices = []
-        
-    def load_invoices(self):
-        """Загрузка счетов из JSON файла"""
-        try:
-            with open(self.json_file_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                self.invoices = list(data.keys())  # Получаем только номера счетов
-            print(f"Загружено {len(self.invoices)} счетов")
-            return True
-        except Exception as e:
-            print(f"Ошибка при загрузке файла: {e}")
-            return False
+def parse_accounts_from_xlsx(file_path):
+    """
+    Парсит xlsx файл и создает словарь с номерами счетов и списками штрихкодов
     
-    def type_cyrillic_V(self):
-        """Ввод русской буквы 'В' через Alt-код"""
-        # Нажимаем и удерживаем Alt
-        pyautogui.keyDown('alt')
-        time.sleep(0.1)
+    Args:
+        file_path (str): путь к xlsx файлу
         
-        # Вводим код 0226 для буквы 'В'
-        pyautogui.press('0')
-        time.sleep(0.05)
-        pyautogui.press('2')
-        time.sleep(0.05)
-        pyautogui.press('2')
-        time.sleep(0.05)
-        pyautogui.press('6')
-        time.sleep(0.05)
-        
-        # Отпускаем Alt
-        pyautogui.keyUp('alt')
-        time.sleep(0.1)
+    Returns:
+        dict: словарь в формате {номер_счета: [список_штрихкодов]}
+    """
+    # Загружаем книгу Excel
+    wb = load_workbook(filename=file_path)
+    sheet = wb.active
     
-    def type_invoice(self, invoice_number):
-        """Ввод одного счета посимвольно"""
-        try:
-            # Клик в поле ввода
-            pyautogui.click(self.input_coords[0], self.input_coords[1])
-            time.sleep(0.5)
-            
-            # Очистка поля
-            pyautogui.hotkey('ctrl', 'a')
-            time.sleep(0.2)
-            pyautogui.press('delete')
-            time.sleep(0.2)
-            
-            # Посимвольный ввод номера счета
-            for char in invoice_number:
-                if char == 'В':  # Русская буква 'В'
-                    self.type_cyrillic_V()
-                else:
-                    # Все остальные символы (цифры, дефисы, слэши)
-                    pyautogui.press(char)
-                time.sleep(0.1)  # небольшая пауза между символами
-            
-            time.sleep(0.5)
-            
-            # Нажатие Enter
-            pyautogui.press('enter')
-            time.sleep(0.5)
-            
-            # Клик на кнопку отправки
-            pyautogui.click(self.submit_coords[0], self.submit_coords[1])
-            time.sleep(3.5)
-            
-            return True
-            
-        except Exception as e:
-            print(f"Ошибка при вводе счета {invoice_number}: {e}")
-            return False
+    result_dict = {}
+    current_account = None
+    barcodes_list = []
     
-    def pause_handler(self):
-        """Обработчик паузы"""
-        if not self.pause_event.is_set():
-            print("\n⏸️  ПАУЗА - нажмите Left Ctrl для продолжения")
-            self.pause_event.set()
-        else:
-            print("\n▶️  ПРОДОЛЖЕНИЕ")
-            self.pause_event.clear()
+    # Проходим по всем строкам в листе
+    for row in sheet.iter_rows(values_only=True):
+        # Пропускаем пустые строки
+        if not row or row[0] is None:
+            continue
+            
+        # Проверяем, является ли строка строкой со счетом
+        if isinstance(row[0], str) and "счет" in row[0].lower():
+            # Если у нас уже есть текущий счет, сохраняем его данные
+            if current_account is not None and barcodes_list:
+                result_dict[current_account] = barcodes_list.copy()
+            
+            # Извлекаем номер счета
+            try:
+                current_account = row[0].split(" ")[3][1:]
+                barcodes_list = []  # Сбрасываем список штрихкодов для нового счета
+            except IndexError:
+                print(f"Ошибка при парсинге номера счета из строки: {row[0]}")
+                current_account = None
+                continue
+        
+        # Если это строка с прибором (11 столбец содержит числовой штрихкод)
+        elif current_account is not None and len(row) > 10 and row[10] is not None:
+            try:
+                # Пытаемся преобразовать значение в число (штрихкод)
+                barcode = float(row[10])
+                barcodes_list.append(str(int(barcode)))  # Преобразуем в целое число и затем в строку
+            except (ValueError, TypeError):
+                # Если не число, пропускаем
+                continue
     
-    def stop_handler(self):
-        """Обработчик остановки"""
-        print("\n⏹️  ОСТАНОВКА программы")
-        self.stop_event.set()
-        self.pause_event.clear()
+    # Добавляем последний счет
+    if current_account is not None and barcodes_list:
+        result_dict[current_account] = barcodes_list
     
-    def run(self):
-        """Основной цикл выполнения"""
-        if not self.load_invoices():
-            return
-        
-        print("Программа запущена!")
-        print("Фиксированные координаты:")
-        print(f"  Поле ввода: {self.input_coords}")
-        print(f"  Кнопка отправки: {self.submit_coords}")
-        print("\nУправление:")
-        print("  - Left Alt: Пауза/Продолжение")
-        print("  - Left Ctrl: Остановка программы")
-        print("  - 5 секунд до начала...")
-        time.sleep(5)
-        
-        # Регистрируем горячие клавиши
-        keyboard.add_hotkey('left alt', self.pause_handler)
-        keyboard.add_hotkey('left ctrl', self.stop_handler)
-        
-        try:
-            for i, invoice in enumerate(self.invoices, 1):
-                if self.stop_event.is_set():
-                    break
-                
-                # Проверяем паузу
-                while self.pause_event.is_set() and not self.stop_event.is_set():
-                    time.sleep(0.1)
-                
-                if self.stop_event.is_set():
-                    break
-                
-                print(f"[{i}/{len(self.invoices)}] Ввод счета: {invoice}")
-                
-                if self.type_invoice(invoice):
-                    print(f"✓ Счет {invoice} успешно введен")
-                else:
-                    print(f"✗ Ошибка при вводе счета {invoice}")
-                
-                # Небольшая пауза между счетами
-                time.sleep(0.5)
-                
-        except KeyboardInterrupt:
-            print("\nПрограмма прервана пользователем")
-        finally:
-            # Убираем обработчики горячих клавиш
-            keyboard.unhook_all()
-            print("Программа завершена")
+    return result_dict
 
-# Основная программа
+# Пример использования
 if __name__ == "__main__":
-    print("Автоматический ввод счетов с фиксированными координатами")
-    print("=" * 60)
-    
-    # Путь к JSON файлу
-    json_file = "filtered_invoices_data.json"
-    
-    # Установим паузу при перемещении мыши в угол экрана для безопасности
-    pyautogui.FAILSAFE = True
+    file_path = "ваш_файл.xlsx"  # Укажите путь к вашему файлу
     
     try:
-        # Создаем и запускаем авто-ввод
-        typer = InvoiceAutoTyper(json_file)
+        accounts_dict = parse_accounts_from_xlsx(file_path)
         
-        print("\nПеред началом убедитесь, что:")
-        print("1. Поле ввода активно и готово к приему данных")
-        print("2. Программа, куда вводим данные, запущена и видна")
-        print("3. NumLock должен быть включен для работы Alt-кодов")
-        print("4. Окно должно быть в правильном положении для координат (475,316) и (1242,319)")
+        # Выводим результат
+        print("Результат парсинга:")
+        for account, barcodes in accounts_dict.items():
+            print(f"Счет {account}: {len(barcodes)} штрихкодов")
+            print(f"  Штрихкоды: {barcodes}")
+            print()
+            
+        # Сохраняем результат в файл (опционально)
+        with open("результат.txt", "w", encoding="utf-8") as f:
+            for account, barcodes in accounts_dict.items():
+                f.write(f"Счет {account}: {barcodes}\n")
+                
+        print(f"Результат сохранен в файл 'результат.txt'")
         
-        input("Нажмите Enter для начала ввода счетов...")
-        typer.run()
-        
+    except FileNotFoundError:
+        print(f"Файл {file_path} не найден!")
     except Exception as e:
-        print(f"Ошибка: {e}")
-    finally:
-        keyboard.unhook_all()
+        print(f"Произошла ошибка: {e}")
