@@ -1,77 +1,154 @@
-import openpyxl
-from datetime import datetime
-import matplotlib.pyplot as plt
+import pandas as pd
+import re
 from collections import defaultdict
 
-# Настройки
-INPUT_FILE = "your_file.xlsx"  # Замените на имя вашего файла
-DATE_COLUMN = 0  # Первый столбец (индекс 0)
-CHART_TITLE = "Количество записей по дням"
-OUTPUT_CHART = "records_chart.png"
-
-def analyze_records():
-    # Загружаем книгу
-    wb = openpyxl.load_workbook(INPUT_FILE)
-    ws = wb.active
-    
-    # Словарь для подсчета записей по дням
-    date_counts = defaultdict(int)
-    
-    for row in ws.iter_rows(values_only=True):
-        cell_value = row[DATE_COLUMN]
+def parse_invoice_file(file_path):
+    """
+    Парсит XLSX файл с информацией о счетах и приборах
+    с учетом приоритета статусов: выдано > выполнено > передано
+    """
+    try:
+        # Читаем Excel файл
+        df = pd.read_excel(file_path)
         
-        # Пропускаем пустые значения
-        if not cell_value:
-            continue
+        # Проверяем наличие нужных колонок
+        required_columns = ['дата', 'Счет на оплату', 'Штрихкод прибора', 'Статус прибора']
+        for col in required_columns:
+            if col not in df.columns:
+                print(f"Ошибка: отсутствует колонка '{col}'")
+                return None
+                
+    except Exception as e:
+        print(f"Ошибка при чтении файла: {e}")
+        return None
+    
+    # Инициализируем словарь для хранения данных
+    invoices_dict = defaultdict(lambda: {
+        'приборы': defaultdict(str),
+        'дата': None
+    })
+    
+    # Определяем приоритет статусов (чем выше число, тем выше приоритет)
+    status_priority = {
+        'Передано': 1,      # в лаборатории
+        'Выполнено': 2,     # на складе
+        'Выдано': 3         # отдан
+    }
+    
+    # Регулярное выражение для извлечения номера счета
+    invoice_pattern = r'Счет на оплату\s+([A-Z0-9-]+/[0-9]+)'
+    
+    # Обрабатываем каждую строку
+    for index, row in df.iterrows():
+        try:
+            # Извлекаем номер счета
+            invoice_text = str(row['Счет на оплату'])
+            match = re.search(invoice_pattern, invoice_text)
+            if not match:
+                print(f"Не удалось извлечь номер счета из: {invoice_text}")
+                continue
+                
+            invoice_number = match.group(1)
+            barcode = str(row['Штрихкод прибора']).strip()
+            status = str(row['Статус прибора']).strip()
+            date = row['дата']
             
-        # Обрабатываем datetime объект
-        if isinstance(cell_value, datetime):
-            date_only = cell_value.date()  # Извлекаем только дату
-            date_counts[date_only] += 1
-        else:
-            print(f"Неожиданный формат даты: {cell_value} (тип: {type(cell_value)})")
+            # Если дата еще не установлена для этого счета, устанавливаем
+            if invoices_dict[invoice_number]['дата'] is None:
+                invoices_dict[invoice_number]['дата'] = date
+            
+            # Проверяем и нормализуем статус
+            normalized_status = None
+            if 'передано' in status.lower():
+                normalized_status = 'Передано'
+            elif 'выполнено' in status.lower():
+                normalized_status = 'Выполнено'
+            elif 'выдано' in status.lower():
+                normalized_status = 'Выдано'
+            else:
+                print(f"Неизвестный статус: {status} для прибора {barcode}")
+                continue
+            
+            # Обновляем статус только если новый статус имеет более высокий приоритет
+            current_status = invoices_dict[invoice_number]['приборы'][barcode]
+            current_priority = status_priority.get(current_status, 0)
+            new_priority = status_priority[normalized_status]
+            
+            if new_priority > current_priority:
+                invoices_dict[invoice_number]['приборы'][barcode] = normalized_status
+                
+        except Exception as e:
+            print(f"Ошибка при обработке строки {index + 1}: {e}")
             continue
     
-    # Проверяем, есть ли данные
-    if not date_counts:
-        print("Нет данных для построения диаграммы!")
-        return
-    
-    # Подготовка данных для графика
-    sorted_dates = sorted(date_counts.keys())
-    dates_str = [d.strftime("%d.%m.%Y") for d in sorted_dates]
-    counts = [date_counts[d] for d in sorted_dates]
-    max_count = max(counts)
-    
-    # Создание диаграммы
-    plt.figure(figsize=(12, 6))
-    bars = plt.bar(dates_str, counts, color='#4b8bbe')
-    
-    # Настройка внешнего вида
-    plt.title(CHART_TITLE)
-    plt.xlabel("Дата")
-    plt.ylabel("Количество записей")
-    plt.ylim(0, max_count + 1)
-    plt.xticks(rotation=45, ha='right')
-    plt.grid(axis='y', linestyle='--', alpha=0.7)
-    
-    # Добавляем подписи значений
-    for bar in bars:
-        height = bar.get_height()
-        plt.text(bar.get_x() + bar.get_width()/2., height,
-                str(height),
-                ha='center', va='bottom')
-    
-    plt.tight_layout()
-    plt.savefig(OUTPUT_CHART, dpi=300)
-    print(f"Диаграмма сохранена как {OUTPUT_CHART}")
-    
-    # Вывод статистики
-    print("\nСтатистика по дням:")
-    for date, count in sorted(date_counts.items()):
-        print(f"{date.strftime('%d.%m.%Y')}: {count} записей")
-    
-    plt.show()
+    return dict(invoices_dict)
 
+def print_invoices_info(invoices_dict):
+    """
+    Выводит информацию о счетах и приборах
+    """
+    print("=" * 60)
+    print("ОБРАБОТАННЫЕ СЧЕТА И ПРИБОРЫ")
+    print("=" * 60)
+    
+    for invoice_number, data in invoices_dict.items():
+        print(f"\nСчет: {invoice_number}")
+        print(f"Дата: {data['дата']}")
+        print("Приборы:")
+        
+        for barcode, status in data['приборы'].items():
+            status_russian = {
+                'Передано': 'в лаборатории',
+                'Выполнено': 'на складе', 
+                'Выдано': 'отдан'
+            }.get(status, status)
+            
+            print(f"  - {barcode}: {status} ({status_russian})")
+        
+        print(f"Всего приборов: {len(data['приборы'])}")
+        print("-" * 40)
+
+def get_invoice_stats(invoices_dict):
+    """
+    Возвращает статистику по счетам
+    """
+    stats = {
+        'total_invoices': len(invoices_dict),
+        'total_devices': 0,
+        'status_counts': {'Передано': 0, 'Выполнено': 0, 'Выдано': 0}
+    }
+    
+    for data in invoices_dict.values():
+        stats['total_devices'] += len(data['приборы'])
+        for status in data['приборы'].values():
+            if status in stats['status_counts']:
+                stats['status_counts'][status] += 1
+    
+    return stats
+
+# Пример использования
 if __name__ == "__main__":
-    analyze_records()
+    file_path = input("Введите путь к XLSX файлу: ").strip()
+    
+    invoices_data = parse_invoice_file(file_path)
+    
+    if invoices_data:
+        print_invoices_info(invoices_data)
+        
+        # Выводим статистику
+        stats = get_invoice_stats(invoices_data)
+        print("\n" + "=" * 60)
+        print("СТАТИСТИКА")
+        print("=" * 60)
+        print(f"Всего счетов: {stats['total_invoices']}")
+        print(f"Всего приборов: {stats['total_devices']}")
+        print(f"Передано в лабораторию: {stats['status_counts']['Передано']}")
+        print(f"На складе: {stats['status_counts']['Выполнено']}")
+        print(f"Отдано клиенту: {stats['status_counts']['Выдано']}")
+        
+        # Сохраняем результат в JSON для дальнейшего использования
+        import json
+        with open('invoices_data.json', 'w', encoding='utf-8') as f:
+            json.dump(invoices_data, f, ensure_ascii=False, indent=2, default=str)
+        
+        print("\nДанные сохранены в файл 'invoices_data.json'")
