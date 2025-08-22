@@ -1,22 +1,182 @@
-from keyboard import press_and_release
-from time import sleep
-import pyautogui, pyperclip
+import pyautogui
+import json
+import time
+import keyboard
+from threading import Event
 
-def paste(text: str):    
-    pyperclip.copy(text)
-    press_and_release('ctrl + v')
+class InvoiceAutoTyper:
+    def __init__(self, json_file_path):
+        """
+        Инициализация автоматического ввода счетов
+        
+        :param json_file_path: путь к JSON файлу со счетами
+        """
+        self.json_file_path = json_file_path
+        # Фиксированные координаты
+        self.input_coords = (475, 316)    # Строка ввода
+        self.submit_coords = (1242, 319)  # Кнопка отправки
+        self.pause_event = Event()
+        self.stop_event = Event()
+        self.invoices = []
+        
+    def load_invoices(self):
+        """Загрузка счетов из JSON файла"""
+        try:
+            with open(self.json_file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                self.invoices = list(data.keys())  # Получаем только номера счетов
+            print(f"Загружено {len(self.invoices)} счетов")
+            return True
+        except Exception as e:
+            print(f"Ошибка при загрузке файла: {e}")
+            return False
+    
+    def type_cyrillic_V(self):
+        """Ввод русской буквы 'В' через Alt-код"""
+        # Нажимаем и удерживаем Alt
+        pyautogui.keyDown('alt')
+        time.sleep(0.1)
+        
+        # Вводим код 0226 для буквы 'В'
+        pyautogui.press('0')
+        time.sleep(0.05)
+        pyautogui.press('2')
+        time.sleep(0.05)
+        pyautogui.press('2')
+        time.sleep(0.05)
+        pyautogui.press('6')
+        time.sleep(0.05)
+        
+        # Отпускаем Alt
+        pyautogui.keyUp('alt')
+        time.sleep(0.1)
+    
+    def type_invoice(self, invoice_number):
+        """Ввод одного счета посимвольно"""
+        try:
+            # Клик в поле ввода
+            pyautogui.click(self.input_coords[0], self.input_coords[1])
+            time.sleep(0.5)
+            
+            # Очистка поля
+            pyautogui.hotkey('ctrl', 'a')
+            time.sleep(0.2)
+            pyautogui.press('delete')
+            time.sleep(0.2)
+            
+            # Посимвольный ввод номера счета
+            for char in invoice_number:
+                if char == 'В':  # Русская буква 'В'
+                    self.type_cyrillic_V()
+                else:
+                    # Все остальные символы (цифры, дефисы, слэши)
+                    pyautogui.press(char)
+                time.sleep(0.1)  # небольшая пауза между символами
+            
+            time.sleep(0.5)
+            
+            # Нажатие Enter
+            pyautogui.press('enter')
+            time.sleep(0.5)
+            
+            # Клик на кнопку отправки
+            pyautogui.click(self.submit_coords[0], self.submit_coords[1])
+            time.sleep(3.5)
+            
+            return True
+            
+        except Exception as e:
+            print(f"Ошибка при вводе счета {invoice_number}: {e}")
+            return False
+    
+    def pause_handler(self):
+        """Обработчик паузы"""
+        if not self.pause_event.is_set():
+            print("\n⏸️  ПАУЗА - нажмите Left Ctrl для продолжения")
+            self.pause_event.set()
+        else:
+            print("\n▶️  ПРОДОЛЖЕНИЕ")
+            self.pause_event.clear()
+    
+    def stop_handler(self):
+        """Обработчик остановки"""
+        print("\n⏹️  ОСТАНОВКА программы")
+        self.stop_event.set()
+        self.pause_event.clear()
+    
+    def run(self):
+        """Основной цикл выполнения"""
+        if not self.load_invoices():
+            return
+        
+        print("Программа запущена!")
+        print("Фиксированные координаты:")
+        print(f"  Поле ввода: {self.input_coords}")
+        print(f"  Кнопка отправки: {self.submit_coords}")
+        print("\nУправление:")
+        print("  - Left Alt: Пауза/Продолжение")
+        print("  - Left Ctrl: Остановка программы")
+        print("  - 5 секунд до начала...")
+        time.sleep(5)
+        
+        # Регистрируем горячие клавиши
+        keyboard.add_hotkey('left alt', self.pause_handler)
+        keyboard.add_hotkey('left ctrl', self.stop_handler)
+        
+        try:
+            for i, invoice in enumerate(self.invoices, 1):
+                if self.stop_event.is_set():
+                    break
+                
+                # Проверяем паузу
+                while self.pause_event.is_set() and not self.stop_event.is_set():
+                    time.sleep(0.1)
+                
+                if self.stop_event.is_set():
+                    break
+                
+                print(f"[{i}/{len(self.invoices)}] Ввод счета: {invoice}")
+                
+                if self.type_invoice(invoice):
+                    print(f"✓ Счет {invoice} успешно введен")
+                else:
+                    print(f"✗ Ошибка при вводе счета {invoice}")
+                
+                # Небольшая пауза между счетами
+                time.sleep(0.5)
+                
+        except KeyboardInterrupt:
+            print("\nПрограмма прервана пользователем")
+        finally:
+            # Убираем обработчики горячих клавиш
+            keyboard.unhook_all()
+            print("Программа завершена")
 
-
-def type(text: str, interval=0.0):    
-    buffer = pyperclip.paste()
-    if not interval:
-        paste(text)
-    else:
-        for char in text:
-            paste(char)
-            sleep(interval)
-    pyperclip.copy(buffer)
-
-
-pyautogui.hotkey('Win')
-type('Привет мир!', 0.1)
+# Основная программа
+if __name__ == "__main__":
+    print("Автоматический ввод счетов с фиксированными координатами")
+    print("=" * 60)
+    
+    # Путь к JSON файлу
+    json_file = "filtered_invoices_data.json"
+    
+    # Установим паузу при перемещении мыши в угол экрана для безопасности
+    pyautogui.FAILSAFE = True
+    
+    try:
+        # Создаем и запускаем авто-ввод
+        typer = InvoiceAutoTyper(json_file)
+        
+        print("\nПеред началом убедитесь, что:")
+        print("1. Поле ввода активно и готово к приему данных")
+        print("2. Программа, куда вводим данные, запущена и видна")
+        print("3. NumLock должен быть включен для работы Alt-кодов")
+        print("4. Окно должно быть в правильном положении для координат (475,316) и (1242,319)")
+        
+        input("Нажмите Enter для начала ввода счетов...")
+        typer.run()
+        
+    except Exception as e:
+        print(f"Ошибка: {e}")
+    finally:
+        keyboard.unhook_all()
