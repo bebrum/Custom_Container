@@ -1,185 +1,185 @@
-import pandas as pd
-import re
-from collections import defaultdict
+import pyautogui
+import json
+import time
+import keyboard
+from threading import Event
 
-def parse_invoice_file(file_path, completion_threshold=0.6):
-    """
-    Парсит XLSX файл с информацией о счетах и приборах
-    с учетом приоритета статусов: выдано > выполнено > передано
-    """
-    try:
-        # Читаем Excel файл
-        df = pd.read_excel(file_path)
+class InvoiceAutoTyper:
+    def __init__(self, json_file_path, input_coords, submit_coords):
+        """
+        Инициализация автоматического ввода счетов
         
-        # Проверяем наличие нужных колонок
-        required_columns = ['дата', 'Счет на оплату', 'Штрихкод прибора', 'Статус прибора']
-        for col in required_columns:
-            if col not in df.columns:
-                print(f"Ошибка: отсутствует колонка '{col}'")
-                return None
-                
-    except Exception as e:
-        print(f"Ошибка при чтении файла: {e}")
-        return None
-    
-    # Инициализируем словарь для хранения данных
-    invoices_dict = defaultdict(lambda: {
-        'приборы': defaultdict(str),
-        'дата': None
-    })
-    
-    # Определяем приоритет статусов (чем выше число, тем выше приоритет)
-    status_priority = {
-        'Передано': 1,      # в лаборатории
-        'Выполнено': 2,     # на складе
-        'Выдано': 3         # отдан
-    }
-    
-    # Обрабатываем каждую строку
-    for index, row in df.iterrows():
+        :param json_file_path: путь к JSON файлу со счетами
+        :param input_coords: координаты поля ввода (x, y)
+        :param submit_coords: координаты кнопки отправки (x, y)
+        """
+        self.json_file_path = json_file_path
+        self.input_coords = input_coords
+        self.submit_coords = submit_coords
+        self.pause_event = Event()
+        self.stop_event = Event()
+        self.invoices = []
+        
+    def load_invoices(self):
+        """Загрузка счетов из JSON файла"""
         try:
-            # Извлекаем номер счета с помощью split
-            invoice_text = str(row['Счет на оплату'])
-            parts = invoice_text.split(" ")
-            
-            # Проверяем, что есть достаточно частей для извлечения номера
-            if len(parts) >= 4:
-                invoice_number = parts[3]  # Четвертый элемент после split
-            else:
-                print(f"Не удалось извлечь номер счета из: {invoice_text}")
-                continue
-                
-            barcode = str(row['Штрихкод прибора']).strip()
-            status = str(row['Статус прибора']).strip()
-            date = row['дата']
-            
-            # Если дата еще не установлена для этого счета, устанавливаем
-            if invoices_dict[invoice_number]['дата'] is None:
-                invoices_dict[invoice_number]['дата'] = date
-            
-            # Проверяем и нормализуем статус
-            normalized_status = None
-            if 'передано' in status.lower():
-                normalized_status = 'Передано'
-            elif 'выполнено' in status.lower():
-                normalized_status = 'Выполнено'
-            elif 'выдано' in status.lower():
-                normalized_status = 'Выдано'
-            else:
-                print(f"Неизвестный статус: {status} для прибора {barcode}")
-                continue
-            
-            # Обновляем статус только если новый статус имеет более высокий приоритет
-            current_status = invoices_dict[invoice_number]['приборы'][barcode]
-            current_priority = status_priority.get(current_status, 0)
-            new_priority = status_priority[normalized_status]
-            
-            if new_priority > current_priority:
-                invoices_dict[invoice_number]['приборы'][barcode] = normalized_status
-                
+            with open(self.json_file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                self.invoices = list(data.keys())  # Получаем только номера счетов
+            print(f"Загружено {len(self.invoices)} счетов")
+            return True
         except Exception as e:
-            print(f"Ошибка при обработке строки {index + 1}: {e}")
-            continue
+            print(f"Ошибка при загрузке файла: {e}")
+            return False
     
-    # Фильтруем счета по порогу выполнения
-    filtered_invoices = {}
-    for invoice_number, data in invoices_dict.items():
-        # Подсчитываем общее количество приборов (исключая выданные)
-        total_devices = 0
-        completed_devices = 0
-        
-        for status in data['приборы'].values():
-            if status != 'Выдано':  # Исключаем выданные из общего подсчета
-                total_devices += 1
-                if status == 'Выполнено':
-                    completed_devices += 1
-        
-        # Рассчитываем процент выполнения (если есть приборы для подсчета)
-        if total_devices > 0:
-            completion_ratio = completed_devices / total_devices
-            data['completion_ratio'] = completion_ratio
-            data['total_devices'] = total_devices
-            data['completed_devices'] = completed_devices
+    def type_invoice(self, invoice_number):
+        """Ввод одного счета"""
+        try:
+            # Клик в поле ввода
+            pyautogui.click(self.input_coords[0], self.input_coords[1])
+            time.sleep(0.5)
             
-            # Добавляем в результат только если превышен порог
-            if completion_ratio >= completion_threshold:
-                filtered_invoices[invoice_number] = data
-    
-    return filtered_invoices
-
-def print_invoices_info(invoices_dict):
-    """
-    Выводит информацию о счетах и приборах
-    """
-    print("=" * 80)
-    print("СЧЕТА С ВЫПОЛНЕНИЕМ НЕ МЕНЕЕ 60% (без учета выданных приборов)")
-    print("=" * 80)
-    
-    for invoice_number, data in invoices_dict.items():
-        completion_percent = data['completion_ratio'] * 100
-        print(f"\nСчет: {invoice_number}")
-        print(f"Дата: {data['дата']}")
-        print(f"Выполнение: {data['completed_devices']}/{data['total_devices']} "
-              f"({completion_percent:.1f}%) приборов выполнено")
-        print("Приборы:")
-        
-        for barcode, status in data['приборы'].items():
-            status_russian = {
-                'Передано': 'в лаборатории',
-                'Выполнено': 'на складе', 
-                'Выдано': 'отдан'
-            }.get(status, status)
+            # Очистка поля (если нужно)
+            pyautogui.hotkey('ctrl', 'a')
+            time.sleep(0.2)
+            pyautogui.press('delete')
+            time.sleep(0.2)
             
-            print(f"  - {barcode}: {status} ({status_russian})")
+            # Ввод номера счета
+            pyautogui.write(invoice_number)
+            time.sleep(0.5)
+            
+            # Нажатие Enter
+            pyautogui.press('enter')
+            time.sleep(0.5)
+            
+            # Клик на кнопку отправки
+            pyautogui.click(self.submit_coords[0], self.submit_coords[1])
+            time.sleep(3.5)
+            
+            return True
+            
+        except Exception as e:
+            print(f"Ошибка при вводе счета {invoice_number}: {e}")
+            return False
+    
+    def pause_handler(self):
+        """Обработчик паузы"""
+        if not self.pause_event.is_set():
+            print("\n⏸️  ПАУЗА - нажмите Left Ctrl для продолжения")
+            self.pause_event.set()
+        else:
+            print("\n▶️  ПРОДОЛЖЕНИЕ")
+            self.pause_event.clear()
+    
+    def stop_handler(self):
+        """Обработчик остановки"""
+        print("\n⏹️  ОСТАНОВКА программы")
+        self.stop_event.set()
+        self.pause_event.clear()
+    
+    def run(self):
+        """Основной цикл выполнения"""
+        if not self.load_invoices():
+            return
         
-        print("-" * 60)
+        print("Программа запущена!")
+        print("Управление:")
+        print("  - Left Alt: Пауза/Продолжение")
+        print("  - Left Ctrl: Остановка программы")
+        print("  - 5 секунд до начала...")
+        time.sleep(5)
+        
+        # Регистрируем горячие клавиши
+        keyboard.add_hotkey('left alt', self.pause_handler)
+        keyboard.add_hotkey('left ctrl', self.stop_handler)
+        
+        try:
+            for i, invoice in enumerate(self.invoices, 1):
+                if self.stop_event.is_set():
+                    break
+                
+                # Проверяем паузу
+                while self.pause_event.is_set() and not self.stop_event.is_set():
+                    time.sleep(0.1)
+                
+                if self.stop_event.is_set():
+                    break
+                
+                print(f"[{i}/{len(self.invoices)}] Ввод счета: {invoice}")
+                
+                if self.type_invoice(invoice):
+                    print(f"✓ Счет {invoice} успешно введен")
+                else:
+                    print(f"✗ Ошибка при вводе счета {invoice}")
+                
+                # Небольшая пауза между счетами
+                time.sleep(0.5)
+                
+        except KeyboardInterrupt:
+            print("\nПрограмма прервана пользователем")
+        finally:
+            # Убираем обработчики горячих клавиш
+            keyboard.unhook_all()
+            print("Программа завершена")
 
-def get_invoice_stats(invoices_dict):
-    """
-    Возвращает статистику по счетам
-    """
-    stats = {
-        'total_invoices': len(invoices_dict),
-        'total_devices': 0,
-        'status_counts': {'Передано': 0, 'Выполнено': 0, 'Выдано': 0}
-    }
+def get_coordinates():
+    """Функция для получения координат от пользователя"""
+    print("Подготовка к получению координат...")
+    print("Наведите курсор на нужный элемент и нажмите:")
+    print("1. F2 - для получения координат поля ввода")
+    print("2. F3 - для получения координат кнопки отправки")
+    print("3. F4 - для завершения ввода координат")
     
-    for data in invoices_dict.values():
-        for status in data['приборы'].values():
-            if status in stats['status_counts']:
-                stats['status_counts'][status] += 1
-        stats['total_devices'] += len(data['приборы'])
+    coordinates = {'input': None, 'submit': None}
     
-    return stats
+    def on_f2():
+        x, y = pyautogui.position()
+        coordinates['input'] = (x, y)
+        print(f"Координаты поля ввода: ({x}, {y})")
+    
+    def on_f3():
+        x, y = pyautogui.position()
+        coordinates['submit'] = (x, y)
+        print(f"Координаты кнопки отправки: ({x}, {y})")
+    
+    keyboard.add_hotkey('f2', on_f2)
+    keyboard.add_hotkey('f3', on_f3)
+    
+    print("Ожидание ввода координат...")
+    keyboard.wait('f4')
+    keyboard.unhook_all()
+    
+    return coordinates['input'], coordinates['submit']
 
-# Пример использования
+# Основная программа
 if __name__ == "__main__":
-    file_path = input("Введите путь к XLSX файлу: ").strip()
+    import sys
     
-    # Устанавливаем порог выполнения (0.6 = 60%)
-    completion_threshold = 0.6
+    print("Автоматический ввод счетов")
+    print("=" * 50)
     
-    invoices_data = parse_invoice_file(file_path, completion_threshold)
+    # Путь к JSON файлу
+    json_file = "filtered_invoices_data.json"
     
-    if invoices_data:
-        print_invoices_info(invoices_data)
+    # Получаем координаты
+    try:
+        input("Нажмите Enter для начала получения координат...")
+        input_coords, submit_coords = get_coordinates()
         
-        # Выводим статистику
-        stats = get_invoice_stats(invoices_data)
-        print("\n" + "=" * 60)
-        print("СТАТИСТИКА ОТФИЛЬТРОВАННЫХ СЧЕТОВ")
-        print("=" * 60)
-        print(f"Всего счетов (≥{completion_threshold*100:.0f}% выполнения): {stats['total_invoices']}")
-        print(f"Всего приборов в отфильтрованных счетах: {stats['total_devices']}")
-        print(f"Передано в лабораторию: {stats['status_counts']['Передано']}")
-        print(f"На складе: {stats['status_counts']['Выполнено']}")
-        print(f"Отдано клиенту: {stats['status_counts']['Выдано']}")
+        if not input_coords or not submit_coords:
+            print("Не все координаты были введены!")
+            sys.exit(1)
+            
+        print(f"\nПолученные координаты:")
+        print(f"Поле ввода: {input_coords}")
+        print(f"Кнопка отправки: {submit_coords}")
         
-        # Сохраняем результат в JSON для дальнейшего использования
-        import json
-        with open('filtered_invoices_data.json', 'w', encoding='utf-8') as f:
-            json.dump(invoices_data, f, ensure_ascii=False, indent=2, default=str)
+        # Создаем и запускаем авто-ввод
+        typer = InvoiceAutoTyper(json_file, input_coords, submit_coords)
+        typer.run()
         
-        print(f"\nДанные сохранены в файл 'filtered_invoices_data.json'")
-    else:
-        print("Нет счетов, удовлетворяющих условию ≥60% выполнения")
+    except Exception as e:
+        print(f"Ошибка: {e}")
+    finally:
+        keyboard.unhook_all()
