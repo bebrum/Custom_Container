@@ -3,13 +3,13 @@ from openpyxl import load_workbook
 
 def parse_accounts_from_xlsx(file_path):
     """
-    Парсит xlsx файл и создает словарь с номерами счетов и списками штрихкодов
+    Парсит xlsx файл и создает словарь с номерами счетов и УНИКАЛЬНЫМИ списками штрихкодов
     
     Args:
         file_path (str): путь к xlsx файлу
         
     Returns:
-        dict: словарь в формате {номер_счета: [список_штрихкодов]}
+        dict: словарь в формате {номер_счета: [уникальный_список_штрихкодов]}
     """
     # Загружаем книгу Excel
     wb = load_workbook(filename=file_path)
@@ -17,7 +17,7 @@ def parse_accounts_from_xlsx(file_path):
     
     result_dict = {}
     current_account = None
-    barcodes_list = []
+    current_barcodes = set()  # Используем set для хранения уникальных штрихкодов
     
     # Проходим по всем строкам в листе
     for row in sheet.iter_rows(values_only=True):
@@ -28,13 +28,17 @@ def parse_accounts_from_xlsx(file_path):
         # Проверяем, является ли строка строкой со счетом
         if isinstance(row[0], str) and "счет" in row[0].lower():
             # Если у нас уже есть текущий счет, сохраняем его данные
-            if current_account is not None and barcodes_list:
-                result_dict[current_account] = barcodes_list.copy()
+            if current_account is not None and current_barcodes:
+                # Объединяем штрихкоды, если счет уже существует
+                if current_account in result_dict:
+                    result_dict[current_account].update(current_barcodes)
+                else:
+                    result_dict[current_account] = current_barcodes.copy()
             
             # Извлекаем номер счета
             try:
                 current_account = row[0].split(" ")[3][1:]
-                barcodes_list = []  # Сбрасываем список штрихкодов для нового счета
+                current_barcodes = set()  # Сбрасываем set штрихкодов для нового счета
             except IndexError:
                 print(f"Ошибка при парсинге номера счета из строки: {row[0]}")
                 current_account = None
@@ -45,35 +49,131 @@ def parse_accounts_from_xlsx(file_path):
             try:
                 # Пытаемся преобразовать значение в число (штрихкод)
                 barcode = float(row[10])
-                barcodes_list.append(str(int(barcode)))  # Преобразуем в целое число и затем в строку
+                barcode_str = str(int(barcode))  # Преобразуем в целое число и затем в строку
+                current_barcodes.add(barcode_str)  # Добавляем в set (автоматически уникальные)
             except (ValueError, TypeError):
                 # Если не число, пропускаем
                 continue
     
     # Добавляем последний счет
-    if current_account is not None and barcodes_list:
-        result_dict[current_account] = barcodes_list
+    if current_account is not None and current_barcodes:
+        if current_account in result_dict:
+            result_dict[current_account].update(current_barcodes)
+        else:
+            result_dict[current_account] = current_barcodes
+    
+    # Преобразуем sets обратно в lists для удобства использования
+    for account in result_dict:
+        result_dict[account] = sorted(list(result_dict[account]))  # Сортируем для удобства
     
     return result_dict
+
+# Альтернативная версия с использованием pandas
+def parse_accounts_with_pandas(file_path):
+    """
+    Альтернативная версия с использованием pandas с учетом уникальных штрихкодов
+    """
+    import pandas as pd
+    
+    # Читаем весь файл
+    df = pd.read_excel(file_path, header=None)
+    
+    result_dict = {}
+    current_account = None
+    current_barcodes = set()
+    
+    for index, row in df.iterrows():
+        # Пропускаем пустые строки
+        if pd.isna(row[0]):
+            continue
+            
+        # Проверяем строку со счетом
+        if isinstance(row[0], str) and "счет" in row[0].lower():
+            # Сохраняем предыдущий счет
+            if current_account is not None and current_barcodes:
+                if current_account in result_dict:
+                    result_dict[current_account].update(current_barcodes)
+                else:
+                    result_dict[current_account] = current_barcodes.copy()
+            
+            try:
+                current_account = row[0].split(" ")[3][1:]
+                current_barcodes = set()
+            except IndexError:
+                current_account = None
+                continue
+        
+        # Проверяем строку с прибором
+        elif current_account is not None and not pd.isna(row[10]):
+            try:
+                barcode = str(int(float(row[10])))
+                current_barcodes.add(barcode)
+            except (ValueError, TypeError):
+                continue
+    
+    # Добавляем последний счет
+    if current_account is not None and current_barcodes:
+        if current_account in result_dict:
+            result_dict[current_account].update(current_barcodes)
+        else:
+            result_dict[current_account] = current_barcodes
+    
+    # Преобразуем sets в lists
+    for account in result_dict:
+        result_dict[account] = sorted(list(result_dict[account]))
+    
+    return result_dict
+
+def print_statistics(accounts_dict):
+    """
+    Выводит статистику по результатам парсинга
+    """
+    print("=" * 50)
+    print("СТАТИСТИКА ПАРСИНГА:")
+    print("=" * 50)
+    
+    total_accounts = len(accounts_dict)
+    total_barcodes = sum(len(barcodes) for barcodes in accounts_dict.values())
+    unique_barcodes = set()
+    
+    for barcodes in accounts_dict.values():
+        unique_barcodes.update(barcodes)
+    
+    print(f"Всего счетов: {total_accounts}")
+    print(f"Всего уникальных штрихкодов: {len(unique_barcodes)}")
+    print(f"Всего записей штрихкодов: {total_barcodes}")
+    print(f"Среднее количество штрихкодов на счет: {total_barcodes/total_accounts:.1f}")
+    print()
+    
+    # Выводим информацию по каждому счету
+    for account, barcodes in accounts_dict.items():
+        print(f"Счет {account}: {len(barcodes)} уникальных штрихкодов")
+        if len(barcodes) <= 10:  # Показываем все штрихкоды, если их немного
+            print(f"  Штрихкоды: {barcodes}")
+        else:
+            print(f"  Штрихкоды: {barcodes[:3]} ... {barcodes[-3:]}")
+        print()
 
 # Пример использования
 if __name__ == "__main__":
     file_path = "ваш_файл.xlsx"  # Укажите путь к вашему файлу
     
     try:
+        print("Парсинг файла...")
         accounts_dict = parse_accounts_from_xlsx(file_path)
         
-        # Выводим результат
-        print("Результат парсинга:")
-        for account, barcodes in accounts_dict.items():
-            print(f"Счет {account}: {len(barcodes)} штрихкодов")
-            print(f"  Штрихкоды: {barcodes}")
-            print()
-            
-        # Сохраняем результат в файл (опционально)
+        # Выводим статистику
+        print_statistics(accounts_dict)
+        
+        # Сохраняем результат в файл
         with open("результат.txt", "w", encoding="utf-8") as f:
+            f.write("РЕЗУЛЬТАТ ПАРСИНГА:\n")
+            f.write("=" * 50 + "\n")
             for account, barcodes in accounts_dict.items():
-                f.write(f"Счет {account}: {barcodes}\n")
+                f.write(f"Счет {account} ({len(barcodes)} штрихкодов):\n")
+                for barcode in barcodes:
+                    f.write(f"  {barcode}\n")
+                f.write("\n")
                 
         print(f"Результат сохранен в файл 'результат.txt'")
         
