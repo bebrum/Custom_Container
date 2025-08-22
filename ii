@@ -2,7 +2,7 @@ import pandas as pd
 import re
 from collections import defaultdict
 
-def parse_invoice_file(file_path):
+def parse_invoice_file(file_path, completion_threshold=0.6):
     """
     Парсит XLSX файл с информацией о счетах и приборах
     с учетом приоритета статусов: выдано > выполнено > передано
@@ -35,20 +35,20 @@ def parse_invoice_file(file_path):
         'Выдано': 3         # отдан
     }
     
-    # Регулярное выражение для извлечения номера счета
-    invoice_pattern = r'Счет на оплату\s+([A-Z0-9-]+/[0-9]+)'
-    
     # Обрабатываем каждую строку
     for index, row in df.iterrows():
         try:
-            # Извлекаем номер счета
+            # Извлекаем номер счета с помощью split
             invoice_text = str(row['Счет на оплату'])
-            match = re.search(invoice_pattern, invoice_text)
-            if not match:
+            parts = invoice_text.split(" ")
+            
+            # Проверяем, что есть достаточно частей для извлечения номера
+            if len(parts) >= 4:
+                invoice_number = parts[3]  # Четвертый элемент после split
+            else:
                 print(f"Не удалось извлечь номер счета из: {invoice_text}")
                 continue
                 
-            invoice_number = match.group(1)
             barcode = str(row['Штрихкод прибора']).strip()
             status = str(row['Статус прибора']).strip()
             date = row['дата']
@@ -81,19 +81,46 @@ def parse_invoice_file(file_path):
             print(f"Ошибка при обработке строки {index + 1}: {e}")
             continue
     
-    return dict(invoices_dict)
+    # Фильтруем счета по порогу выполнения
+    filtered_invoices = {}
+    for invoice_number, data in invoices_dict.items():
+        # Подсчитываем общее количество приборов (исключая выданные)
+        total_devices = 0
+        completed_devices = 0
+        
+        for status in data['приборы'].values():
+            if status != 'Выдано':  # Исключаем выданные из общего подсчета
+                total_devices += 1
+                if status == 'Выполнено':
+                    completed_devices += 1
+        
+        # Рассчитываем процент выполнения (если есть приборы для подсчета)
+        if total_devices > 0:
+            completion_ratio = completed_devices / total_devices
+            data['completion_ratio'] = completion_ratio
+            data['total_devices'] = total_devices
+            data['completed_devices'] = completed_devices
+            
+            # Добавляем в результат только если превышен порог
+            if completion_ratio >= completion_threshold:
+                filtered_invoices[invoice_number] = data
+    
+    return filtered_invoices
 
 def print_invoices_info(invoices_dict):
     """
     Выводит информацию о счетах и приборах
     """
-    print("=" * 60)
-    print("ОБРАБОТАННЫЕ СЧЕТА И ПРИБОРЫ")
-    print("=" * 60)
+    print("=" * 80)
+    print("СЧЕТА С ВЫПОЛНЕНИЕМ НЕ МЕНЕЕ 60% (без учета выданных приборов)")
+    print("=" * 80)
     
     for invoice_number, data in invoices_dict.items():
+        completion_percent = data['completion_ratio'] * 100
         print(f"\nСчет: {invoice_number}")
         print(f"Дата: {data['дата']}")
+        print(f"Выполнение: {data['completed_devices']}/{data['total_devices']} "
+              f"({completion_percent:.1f}%) приборов выполнено")
         print("Приборы:")
         
         for barcode, status in data['приборы'].items():
@@ -105,8 +132,7 @@ def print_invoices_info(invoices_dict):
             
             print(f"  - {barcode}: {status} ({status_russian})")
         
-        print(f"Всего приборов: {len(data['приборы'])}")
-        print("-" * 40)
+        print("-" * 60)
 
 def get_invoice_stats(invoices_dict):
     """
@@ -119,10 +145,10 @@ def get_invoice_stats(invoices_dict):
     }
     
     for data in invoices_dict.values():
-        stats['total_devices'] += len(data['приборы'])
         for status in data['приборы'].values():
             if status in stats['status_counts']:
                 stats['status_counts'][status] += 1
+        stats['total_devices'] += len(data['приборы'])
     
     return stats
 
@@ -130,7 +156,10 @@ def get_invoice_stats(invoices_dict):
 if __name__ == "__main__":
     file_path = input("Введите путь к XLSX файлу: ").strip()
     
-    invoices_data = parse_invoice_file(file_path)
+    # Устанавливаем порог выполнения (0.6 = 60%)
+    completion_threshold = 0.6
+    
+    invoices_data = parse_invoice_file(file_path, completion_threshold)
     
     if invoices_data:
         print_invoices_info(invoices_data)
@@ -138,17 +167,19 @@ if __name__ == "__main__":
         # Выводим статистику
         stats = get_invoice_stats(invoices_data)
         print("\n" + "=" * 60)
-        print("СТАТИСТИКА")
+        print("СТАТИСТИКА ОТФИЛЬТРОВАННЫХ СЧЕТОВ")
         print("=" * 60)
-        print(f"Всего счетов: {stats['total_invoices']}")
-        print(f"Всего приборов: {stats['total_devices']}")
+        print(f"Всего счетов (≥{completion_threshold*100:.0f}% выполнения): {stats['total_invoices']}")
+        print(f"Всего приборов в отфильтрованных счетах: {stats['total_devices']}")
         print(f"Передано в лабораторию: {stats['status_counts']['Передано']}")
         print(f"На складе: {stats['status_counts']['Выполнено']}")
         print(f"Отдано клиенту: {stats['status_counts']['Выдано']}")
         
         # Сохраняем результат в JSON для дальнейшего использования
         import json
-        with open('invoices_data.json', 'w', encoding='utf-8') as f:
+        with open('filtered_invoices_data.json', 'w', encoding='utf-8') as f:
             json.dump(invoices_data, f, ensure_ascii=False, indent=2, default=str)
         
-        print("\nДанные сохранены в файл 'invoices_data.json'")
+        print(f"\nДанные сохранены в файл 'filtered_invoices_data.json'")
+    else:
+        print("Нет счетов, удовлетворяющих условию ≥60% выполнения")
